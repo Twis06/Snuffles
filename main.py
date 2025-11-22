@@ -11,18 +11,37 @@ app = Flask(__name__)
 
 TIMEZONE = "America/Chicago"
 
-# Get environment variables with validation
+# Get environment variables
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 
-if not SLACK_SIGNING_SECRET or not SLACK_BOT_TOKEN:
-    raise ValueError("Missing required environment variables: SLACK_SIGNING_SECRET or SLACK_BOT_TOKEN")
-
-client = WebClient(token=SLACK_BOT_TOKEN)
+# Initialize client (will fail later if token is missing)
+try:
+    client = WebClient(token=SLACK_BOT_TOKEN)
+except Exception as e:
+    app.logger.error(f"Failed to initialize Slack client: {e}")
+    client = None
 
 def verify_slack_request(req):
+    """Verify that the request is from Slack"""
     timestamp = req.headers.get("X-Slack-Request-Timestamp")
-    if abs(time.time() - int(timestamp)) > 60 * 5:
+    slack_signature = req.headers.get("X-Slack-Signature")
+    
+    if not timestamp or not slack_signature:
+        app.logger.warning("Missing Slack signature headers")
+        return False
+    
+    try:
+        # Check timestamp is recent (within 5 minutes)
+        if abs(time.time() - int(timestamp)) > 60 * 5:
+            app.logger.warning(f"Request timestamp too old: {timestamp}")
+            return False
+    except (ValueError, TypeError) as e:
+        app.logger.warning(f"Invalid timestamp: {timestamp}, error: {e}")
+        return False
+
+    if not SLACK_SIGNING_SECRET:
+        app.logger.error("SLACK_SIGNING_SECRET not configured")
         return False
 
     sig_basestring = f"v0:{timestamp}:{req.get_data().decode('utf-8')}"
@@ -31,8 +50,6 @@ def verify_slack_request(req):
         sig_basestring.encode(),
         hashlib.sha256
     ).hexdigest()
-
-    slack_signature = req.headers.get("X-Slack-Signature")
 
     return hmac.compare_digest(my_signature, slack_signature)
 
