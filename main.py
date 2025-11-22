@@ -87,6 +87,7 @@ def slack_events():
 
     # Handle @snuffles mentions
     if event.get("type") == "app_mention":
+        global TIMEZONE
         text = event.get("text", "").lower()
         channel = event["channel"]
 
@@ -104,7 +105,6 @@ def slack_events():
             new_tz = text.split("timezone")[-1].strip()
             try:
                 pytz.timezone(new_tz)
-                global TIMEZONE
                 TIMEZONE = new_tz
                 client.chat_postMessage(channel=channel, text=f"Timezone updated to: {TIMEZONE}")
             except pytz.exceptions.UnknownTimeZoneError:
