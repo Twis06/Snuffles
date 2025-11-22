@@ -56,14 +56,14 @@ def verify_slack_request(req):
 ###########################
 # Health check endpoint
 ###########################
-@app.get("/health")
+@app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"}), 200
 
 ###########################
 # Main slack messaging code 
 ###########################
-@app.post("/slack/events")
+@app.route("/slack/events", methods=["POST"])
 def slack_events():
     data = request.json
     
