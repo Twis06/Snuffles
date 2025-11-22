@@ -65,17 +65,19 @@ def health():
 ###########################
 @app.post("/slack/events")
 def slack_events():
-    # Signature check first (required even for challenge)
+    data = request.json
+    
+    # Handle URL verification challenge BEFORE signature check
+    # (Slack doesn't sign the initial challenge request)
+    if "challenge" in data:
+        app.logger.info("Responding to Slack URL verification challenge")
+        return jsonify({"challenge": data["challenge"]})
+    
+    # Signature check for all other events
     if not verify_slack_request(request):
         app.logger.error(f"Signature verification failed")
         app.logger.error(f"Headers: {dict(request.headers)}")
         return jsonify({"error": "invalid signature"}), 403
-
-    data = request.json
-    
-    # Verification challenge
-    if "challenge" in data:
-        return jsonify({"challenge": data["challenge"]})
 
     event = data.get("event", {})
 
