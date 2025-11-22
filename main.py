@@ -37,14 +37,15 @@ def verify_slack_request(req):
 ###########################
 @app.post("/slack/events")
 def slack_events():
-    # Verification challenge
-    data = request.json
-    if "challenge" in data:
-        return jsonify({"challenge": data["challenge"]})
-
-    # Signature check
+    # Signature check first (required even for challenge)
     if not verify_slack_request(request):
         return jsonify({"error": "invalid signature"}), 403
+
+    data = request.json
+    
+    # Verification challenge
+    if "challenge" in data:
+        return jsonify({"challenge": data["challenge"]})
 
     event = data.get("event", {})
 
