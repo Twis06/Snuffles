@@ -11,8 +11,12 @@ app = Flask(__name__)
 
 TIMEZONE = "America/Chicago"
 
-SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
-SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
+# Get environment variables with validation
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+
+if not SLACK_SIGNING_SECRET or not SLACK_BOT_TOKEN:
+    raise ValueError("Missing required environment variables: SLACK_SIGNING_SECRET or SLACK_BOT_TOKEN")
 
 client = WebClient(token=SLACK_BOT_TOKEN)
 
@@ -33,12 +37,21 @@ def verify_slack_request(req):
     return hmac.compare_digest(my_signature, slack_signature)
 
 ###########################
+# Health check endpoint
+###########################
+@app.get("/health")
+def health():
+    return jsonify({"status": "ok"}), 200
+
+###########################
 # Main slack messaging code 
 ###########################
 @app.post("/slack/events")
 def slack_events():
     # Signature check first (required even for challenge)
     if not verify_slack_request(request):
+        app.logger.error(f"Signature verification failed")
+        app.logger.error(f"Headers: {dict(request.headers)}")
         return jsonify({"error": "invalid signature"}), 403
 
     data = request.json
