@@ -79,6 +79,7 @@ def slack_events():
         app.logger.error(f"Headers: {dict(request.headers)}")
         return jsonify({"error": "invalid signature"}), 403
 
+    app.logger.info(f"Received event: {data.get('event', {}).get('type')}")
     event = data.get("event", {})
 
     # Avoid bot replying to itself
@@ -90,25 +91,32 @@ def slack_events():
         global TIMEZONE
         text = event.get("text", "").lower()
         channel = event["channel"]
+        
+        app.logger.info(f"Received app_mention: {text}")
 
-        if "hi" in text or "hello" in text: #test function
-            client.chat_postMessage(channel=channel, text="Hi there! I am Snuffles.")
-        if "date" in text or "time" in text or "day" in text: #test time function
-            try:
-                tz = pytz.timezone(TIMEZONE)
-                now = datetime.now(tz)
-                formatted_time = now.strftime("%Y-%m-%d %H:%M:%S %Z")
-                client.chat_postMessage(channel=channel, text=f"The current date and time is: {formatted_time}")
-            except pytz.exceptions.UnknownTimeZoneError:
-                client.chat_postMessage(channel=channel, text=f"Error: Invalid timezone '{TIMEZONE}'")
-        if "timezone" in text:
-            new_tz = text.split("timezone")[-1].strip()
-            try:
-                pytz.timezone(new_tz)
-                TIMEZONE = new_tz
-                client.chat_postMessage(channel=channel, text=f"Timezone updated to: {TIMEZONE}")
-            except pytz.exceptions.UnknownTimeZoneError:
-                client.chat_postMessage(channel=channel, text=f"Error: '{new_tz}' is not a valid timezone. Use format like 'America/New_York', 'China/Shanghai'")
+        try:
+            if "hi" in text or "hello" in text: #test function
+                response = client.chat_postMessage(channel=channel, text="Hi there! I am Snuffles.")
+                app.logger.info(f"Sent greeting response: {response['ok']}")
+            if "date" in text or "time" in text or "day" in text: #test time function
+                try:
+                    tz = pytz.timezone(TIMEZONE)
+                    now = datetime.now(tz)
+                    formatted_time = now.strftime("%Y-%m-%d %H:%M:%S %Z")
+                    client.chat_postMessage(channel=channel, text=f"The current date and time is: {formatted_time}")
+                except pytz.exceptions.UnknownTimeZoneError:
+                    client.chat_postMessage(channel=channel, text=f"Error: Invalid timezone '{TIMEZONE}'")
+            if "timezone" in text:
+                new_tz = text.split("timezone")[-1].strip()
+                try:
+                    pytz.timezone(new_tz)
+                    TIMEZONE = new_tz
+                    client.chat_postMessage(channel=channel, text=f"Timezone updated to: {TIMEZONE}")
+                except pytz.exceptions.UnknownTimeZoneError:
+                    client.chat_postMessage(channel=channel, text=f"Error: '{new_tz}' is not a valid timezone. Use format like 'America/New_York', 'China/Shanghai'")
+        except Exception as e:
+            app.logger.error(f"Error handling app_mention: {e}")
+            app.logger.error(f"Client: {client}, Token set: {bool(SLACK_BOT_TOKEN)}")
  
 
     return jsonify({"ok": True})
