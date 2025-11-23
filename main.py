@@ -65,7 +65,11 @@ def health():
 ###########################
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
+    app.logger.info(f"Received POST request to /slack/events")
+    app.logger.info(f"Request headers: {dict(request.headers)}")
+    
     data = request.json
+    app.logger.info(f"Request data type: {data.get('type')}")
     
     # Handle URL verification challenge BEFORE signature check
     # (Slack doesn't sign the initial challenge request)
