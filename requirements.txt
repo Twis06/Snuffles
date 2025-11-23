@@ -2,3 +2,5 @@ flask>=2.0.0
 slack_sdk
 gunicorn
 pytz
+icalendar
+requests

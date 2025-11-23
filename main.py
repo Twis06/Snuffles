@@ -2,14 +2,17 @@ import os
 import hmac
 import hashlib
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 from slack_sdk.web import WebClient
 import pytz
+import requests
+from icalendar import Calendar
 
 app = Flask(__name__)
 
 TIMEZONE = "America/Chicago"
+CALENDAR_URL = "https://calendar.google.com/calendar/ical/075a102c47c915f5617b04d1d9b947c302f33e8a848567712ad3e3461e8206c9%40group.calendar.google.com/public/basic.ics"
 
 # Get environment variables
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
@@ -21,6 +24,44 @@ try:
 except Exception as e:
     app.logger.error(f"Failed to initialize Slack client: {e}")
     client = None
+
+def get_calendar_events(days=7):
+    """Fetch calendar events from iCal feed"""
+    try:
+        response = requests.get(CALENDAR_URL, timeout=10)
+        response.raise_for_status()
+        
+        cal = Calendar.from_ical(response.content)
+        tz = pytz.timezone(TIMEZONE)
+        now = datetime.now(tz)
+        end_date = now + timedelta(days=days)
+        
+        events = []
+        for component in cal.walk():
+            if component.name == "VEVENT":
+                dtstart = component.get('dtstart').dt
+                summary = str(component.get('summary', 'No title'))
+                
+                # Convert to timezone-aware datetime if needed
+                if isinstance(dtstart, datetime):
+                    if dtstart.tzinfo is None:
+                        dtstart = tz.localize(dtstart)
+                    else:
+                        dtstart = dtstart.astimezone(tz)
+                    
+                    # Only include future events within the date range
+                    if now <= dtstart <= end_date:
+                        events.append({
+                            'start': dtstart,
+                            'summary': summary
+                        })
+        
+        # Sort by start time
+        events.sort(key=lambda x: x['start'])
+        return events
+    except Exception as e:
+        print(f"Error fetching calendar: {e}")
+        return None
 
 def verify_slack_request(req):
     """Verify that the request is from Slack"""
@@ -65,11 +106,7 @@ def health():
 ###########################
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
-    print("=== Received POST request to /slack/events ===")
-    print(f"Request headers: {dict(request.headers)}")
-    
     data = request.json
-    print(f"Request data: {data}")
     
     # Handle URL verification challenge BEFORE signature check
     # (Slack doesn't sign the initial challenge request)
@@ -83,7 +120,6 @@ def slack_events():
         app.logger.error(f"Headers: {dict(request.headers)}")
         return jsonify({"error": "invalid signature"}), 403
 
-    app.logger.info(f"Received event: {data.get('event', {}).get('type')}")
     event = data.get("event", {})
 
     # Avoid bot replying to itself
@@ -118,6 +154,57 @@ def slack_events():
                     client.chat_postMessage(channel=channel, text=f"Timezone updated to: {TIMEZONE}")
                 except pytz.exceptions.UnknownTimeZoneError:
                     client.chat_postMessage(channel=channel, text=f"Error: '{new_tz}' is not a valid timezone. Use format like 'America/New_York', 'China/Shanghai'")
+            
+            # Calendar commands
+            if "next event" in text:
+                events = get_calendar_events(days=30)
+                if events is None:
+                    client.chat_postMessage(channel=channel, text="Sorry, I couldn't fetch the calendar.")
+                elif len(events) == 0:
+                    client.chat_postMessage(channel=channel, text="No upcoming events found.")
+                else:
+                    event = events[0]
+                    time_str = event['start'].strftime("%A, %B %d at %I:%M %p")
+                    client.chat_postMessage(channel=channel, text=f"📅 Next event: *{event['summary']}*\n🕐 {time_str}")
+            
+            elif "today" in text and ("event" in text or "calendar" in text):
+                events = get_calendar_events(days=1)
+                if events is None:
+                    client.chat_postMessage(channel=channel, text="Sorry, I couldn't fetch the calendar.")
+                elif len(events) == 0:
+                    client.chat_postMessage(channel=channel, text="No events today.")
+                else:
+                    msg = "📅 *Today's events:*\n"
+                    for event in events:
+                        time_str = event['start'].strftime("%I:%M %p")
+                        msg += f"• {time_str} - {event['summary']}\n"
+                    client.chat_postMessage(channel=channel, text=msg)
+            
+            elif "this week" in text and ("event" in text or "calendar" in text):
+                events = get_calendar_events(days=7)
+                if events is None:
+                    client.chat_postMessage(channel=channel, text="Sorry, I couldn't fetch the calendar.")
+                elif len(events) == 0:
+                    client.chat_postMessage(channel=channel, text="No events this week.")
+                else:
+                    msg = "📅 *This week's events:*\n"
+                    for event in events:
+                        time_str = event['start'].strftime("%a %b %d, %I:%M %p")
+                        msg += f"• {time_str} - {event['summary']}\n"
+                    client.chat_postMessage(channel=channel, text=msg)
+            
+            elif "calendar" in text and "next event" not in text:
+                events = get_calendar_events(days=7)
+                if events is None:
+                    client.chat_postMessage(channel=channel, text="Sorry, I couldn't fetch the calendar.")
+                elif len(events) == 0:
+                    client.chat_postMessage(channel=channel, text="No upcoming events in the next 7 days.")
+                else:
+                    msg = "📅 *Upcoming events (next 7 days):*\n"
+                    for event in events:
+                        time_str = event['start'].strftime("%a %b %d, %I:%M %p")
+                        msg += f"• {time_str} - {event['summary']}\n"
+                    client.chat_postMessage(channel=channel, text=msg)
         except Exception as e:
             app.logger.error(f"Error handling app_mention: {e}")
             app.logger.error(f"Client: {client}, Token set: {bool(SLACK_BOT_TOKEN)}")
