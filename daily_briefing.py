@@ -1,6 +1,12 @@
 import requests
 import xml.etree.ElementTree as ET
+import os
+import json
 from datetime import datetime
+
+SILICONFLOW_API_KEY = os.environ.get("SILICONFLOW_API_KEY")
+SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
+SILICONFLOW_MODEL = "deepseek-ai/DeepSeek-V3.1-Terminus"  # Using DeepSeek V3 as requested/appropriate
 
 def get_weather_evanston():
     """
@@ -72,28 +78,92 @@ def get_clothing_recommendation(weather_data):
         
     return " ".join(recommendation)
 
-def get_news_headlines(limit=5):
+def get_raw_news_headlines():
     """
-    Fetches top news headlines from BBC News RSS feed.
+    Fetches raw news headlines from multiple BBC News RSS feeds.
+    Returns a list of dictionaries with title and link.
     """
-    try:
-        url = "http://feeds.bbci.co.uk/news/rss.xml"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        
-        root = ET.fromstring(response.content)
-        news_items = []
-        
-        # Iterate over items in the channel
-        for item in root.findall("./channel/item")[:limit]:
-            title = item.find("title").text
-            link = item.find("link").text
-            news_items.append(f"• <{link}|{title}>")
+    feeds = [
+        "http://feeds.bbci.co.uk/news/rss.xml",            # Top Stories
+        "http://feeds.bbci.co.uk/news/world/rss.xml",      # World
+        "http://feeds.bbci.co.uk/news/business/rss.xml",   # Business
+        "http://feeds.bbci.co.uk/news/technology/rss.xml"  # Technology
+    ]
+    
+    all_news = []
+    seen_titles = set()
+    
+    for url in feeds:
+        try:
+            response = requests.get(url, timeout=5)
+            if response.status_code != 200:
+                continue
+                
+            root = ET.fromstring(response.content)
+            # Get top 5 from each feed
+            for item in root.findall("./channel/item")[:5]:
+                title = item.find("title").text
+                link = item.find("link").text
+                
+                if title not in seen_titles:
+                    all_news.append({"title": title, "link": link})
+                    seen_titles.add(title)
+        except Exception as e:
+            print(f"Error fetching news from {url}: {e}")
             
-        return news_items
+    return all_news
+
+def organize_news_with_ai(news_items):
+    """
+    Uses SiliconFlow API to organize and rank news.
+    """
+    if not SILICONFLOW_API_KEY:
+        # Fallback if no API key
+        return "\n".join([f"• <{item['link']}|{item['title']}>" for item in news_items[:5]])
+
+    news_text = "\n".join([f"- {item['title']} ({item['link']})" for item in news_items])
+    
+    prompt = f"""
+    You are a professional news editor. I will provide a list of news headlines with links.
+    Your task is to select the most important stories and organize them into three categories:
+    
+    1. 🌍 Global News (Ranked by importance)
+    2. 💰 Economic News
+    3. 🤖 Tech News
+    
+    For each category, select the top 3-5 most relevant stories from the list.
+    Format the output as a clean Slack message using mrkdwn.
+    Use bullet points with the format: • <Link|Title>
+    Do not make up news. Only use the provided list.
+    If a category has no relevant news in the list, you can skip it or state "No major updates".
+    
+    Here is the news list:
+    {news_text}
+    """
+    
+    payload = {
+        "model": SILICONFLOW_MODEL,
+        "messages": [
+            {"role": "system", "content": "You are a helpful news assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.7
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {SILICONFLOW_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.post(SILICONFLOW_API_URL, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()
+        result = response.json()
+        return result['choices'][0]['message']['content']
     except Exception as e:
-        print(f"Error fetching news: {e}")
-        return ["Could not fetch news at this time."]
+        print(f"Error calling SiliconFlow API: {e}")
+        # Fallback
+        return "\n".join([f"• <{item['link']}|{item['title']}>" for item in news_items[:5]])
 
 def generate_daily_briefing():
     """
@@ -113,14 +183,17 @@ def generate_daily_briefing():
     clothing = get_clothing_recommendation(weather)
     
     # News
-    news = get_news_headlines()
-    news_str = "\n".join(news)
+    raw_news = get_raw_news_headlines()
+    if raw_news:
+        news_section = organize_news_with_ai(raw_news)
+    else:
+        news_section = "Could not fetch news at this time."
     
     message = (
         f"☀️ *Good Morning! Daily Briefing for {today}*\n\n"
         f"*Weather in Evanston:*\n{weather_str}\n\n"
         f"*Dressing Recommendation:*\n👗 {clothing}\n\n"
-        f"*Major News:*\n{news_str}"
+        f"*Major News:*\n{news_section}"
     )
     
     return message
