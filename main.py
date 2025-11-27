@@ -8,6 +8,7 @@ from slack_sdk.web import WebClient
 import pytz
 import requests
 from icalendar import Calendar
+from daily_briefing import generate_daily_briefing
 
 app = Flask(__name__)
 
@@ -17,6 +18,7 @@ CALENDAR_URL = "https://calendar.google.com/calendar/ical/075a102c47c915f5617b04
 # Get environment variables
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+SLACK_DEFAULT_CHANNEL = os.environ.get("SLACK_DEFAULT_CHANNEL", "#general")
 
 # Initialize client (will fail later if token is missing)
 try:
@@ -94,6 +96,33 @@ def verify_slack_request(req):
 
     return hmac.compare_digest(my_signature, slack_signature)
 
+def send_daily_briefing():
+    """Send the daily briefing to the default channel"""
+    if not client:
+        print("Slack client not initialized, skipping daily briefing")
+        return False
+
+    try:
+        message = generate_daily_briefing()
+        client.chat_postMessage(channel=SLACK_DEFAULT_CHANNEL, text=message)
+        print(f"Daily briefing sent to {SLACK_DEFAULT_CHANNEL}")
+        return True
+    except Exception as e:
+        print(f"Failed to send daily briefing: {e}")
+        return False
+
+###########################
+# Cron endpoint
+###########################
+@app.route("/cron/daily-briefing", methods=["POST"])
+def cron_daily_briefing():
+    """Endpoint for Cloud Scheduler to trigger daily briefing"""
+    success = send_daily_briefing()
+    if success:
+        return jsonify({"status": "success", "message": "Daily briefing sent"}), 200
+    else:
+        return jsonify({"status": "error", "message": "Failed to send daily briefing"}), 500
+
 ###########################
 # Health check endpoint
 ###########################
@@ -129,6 +158,7 @@ def slack_events():
     # Handle @snuffles mentions
     if event.get("type") == "app_mention":
         global TIMEZONE
+        
         text = event.get("text", "").lower()
         channel = event["channel"]
         
@@ -155,6 +185,10 @@ def slack_events():
                 except pytz.exceptions.UnknownTimeZoneError:
                     client.chat_postMessage(channel=channel, text=f"Error: '{new_tz}' is not a valid timezone. Use format like 'America/New_York', 'China/Shanghai'")
             
+            if "brief" in text:
+                msg = generate_daily_briefing()
+                client.chat_postMessage(channel=channel, text=msg)
+
             # Calendar commands
             if "next event" in text:
                 events = get_calendar_events(days=30)
@@ -205,6 +239,19 @@ def slack_events():
                         time_str = event['start'].strftime("%a %b %d, %I:%M %p")
                         msg += f"• {time_str} - {event['summary']}\n"
                     client.chat_postMessage(channel=channel, text=msg)
+            
+            # Todo list command
+            if "todo" in text:
+                todos = [
+                    {"task": "Math homework", "date": datetime(2025, 11, 23), "notes": "Section 14.5"}
+                ]
+                
+                msg = "📝 *To-Do List:*\n"
+                for todo in todos:
+                    date_str = todo['date'].strftime("%Y-%m-%d")
+                    msg += f"• {date_str} - {todo['task']}: {todo['notes']}\n"
+                client.chat_postMessage(channel=channel, text=msg)
+                
         except Exception as e:
             app.logger.error(f"Error handling app_mention: {e}")
             app.logger.error(f"Client: {client}, Token set: {bool(SLACK_BOT_TOKEN)}")
